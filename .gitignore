@@ -1,0 +1,24 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+venv/
+ENV/
+env/
+.venv/
+
+# Environment variables
+.env
+
+# Token and credentials
+token.json
+credentials.json
+credentials_b64.txt
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# VSCode settings (optional)
+.vscode/
