@@ -1,61 +1,57 @@
-import os.path
-import pickle
+from googleapiclient.discovery import build
+from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
+import os.path
+import base64
+import re
 
-# Define your SCOPES
-SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']  # You can update the scope as needed
-
-def check_latest_email(service):
-    from base64 import urlsafe_b64decode
-
-    # Get the latest message
-    results = service.users().messages().list(userId='me', maxResults=1).execute()
-    messages = results.get('messages', [])
-    
-    if not messages:
-        return "No new messages found."
-
-    msg = service.users().messages().get(userId='me', id=messages[0]['id'], format='full').execute()
-    
-    headers = msg['payload']['headers']
-    subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject')
-    sender = next((h['value'] for h in headers if h['name'] == 'From'), 'No Sender')
-
-    body = ''
-    if 'parts' in msg['payload']:
-        for part in msg['payload']['parts']:
-            if part['mimeType'] == 'text/plain':
-                body = urlsafe_b64decode(part['body']['data']).decode('utf-8')
-                break
-    else:
-        body = urlsafe_b64decode(msg['payload']['body']['data']).decode('utf-8')
-
-    return f"From: {sender}\nSubject: {subject}\nBody: {body[:500]}"
-
+SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
 def get_gmail_service():
     creds = None
-
-    # ✅ Check if token.json exists
     if os.path.exists('token.json'):
         creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-
-    # ✅ If no valid creds, generate using local server (this should only run locally)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            # ⚠️ Only run this locally to generate token.json
             flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-            creds = flow.run_local_server(port=8080)
-
-        # ✅ Save the token for future use
+            creds = flow.run_local_server(port=0)
         with open('token.json', 'w') as token:
             token.write(creds.to_json())
+    return build('gmail', 'v1', credentials=creds)
 
-    # ✅ Return Gmail service
-    service = build('gmail', 'v1', credentials=creds)
-    return service
+def extract_email_body(payload):
+    # Recursive decode function to handle multipart emails
+    if payload.get('parts'):
+        for part in payload['parts']:
+            if part.get("mimeType") == "text/plain":
+                data = part['body'].get('data')
+                if data:
+                    decoded = base64.urlsafe_b64decode(data).decode("utf-8")
+                    return decoded
+            elif part.get('parts'):
+                return extract_email_body(part)
+    else:
+        data = payload['body'].get('data')
+        if data:
+            decoded = base64.urlsafe_b64decode(data).decode("utf-8")
+            return decoded
+    return "No readable content found."
+
+def check_latest_email(service):
+    response = service.users().messages().list(userId='me', labelIds=['INBOX'], maxResults=1).execute()
+    messages = response.get('messages', [])
+    if not messages:
+        return None, None
+    msg_id = messages[0]['id']
+    msg = service.users().messages().get(userId='me', id=msg_id, format='full').execute()
+    headers = msg['payload'].get('headers', [])
+
+    subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject')
+    sender = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown Sender')
+    body = extract_email_body(msg['payload'])
+
+    content = f"📧 *From:* {sender}\n📌 *Subject:* {subject}\n\n📝 *Message:*\n{body}"
+    return msg_id, content
